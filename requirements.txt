@@ -1,0 +1,8 @@
+customtkinter
+ttkwidgets
+CTkMenuBar
+CTKListbox
+CTkTable
+CTkColorPicker
+CTkToolTip
+manim
