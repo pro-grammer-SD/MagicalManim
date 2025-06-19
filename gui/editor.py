@@ -1,5 +1,5 @@
 import ctypes
-import os
+import subprocess
 import sys
 import threading
 import json
@@ -14,6 +14,8 @@ from CTkListbox import *
 from CTkMenuBar import *
 from CTkToolTip import *
 from ttkwidgets.autocomplete import AutocompleteEntry
+import atexit
+
 sys.path.append(str(Path(__file__).parent.parent))
 from core.ls import get_exposed_classes, is_mobject_class, get_class_init_params, class_in_manim_animations
 
@@ -155,19 +157,56 @@ class Properties(customtkinter.CTkFrame):
         self.current_props.append((extra_label, extra_entry))
         row += 1
         if is_mobject_class(class_obj):
+            color_var = customtkinter.StringVar()
+
             def ask_color():
                 pick_color = AskColor()
                 color = pick_color.get()
+                color_var.set(color)
                 color_button.configure(fg_color=color)
+
             color_button = customtkinter.CTkButton(self, text="Pick a color", command=ask_color)
             color_button.grid(row=row, column=0, columnspan=2, padx=10, pady=20)
             self.widgets.append(color_button)
+            self.current_props.append((customtkinter.CTkLabel(self, text="color"), color_var))
+
+class LogsFrame(customtkinter.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.textbox = customtkinter.CTkTextbox(self, wrap="word")
+        self.textbox.pack(fill="both", expand=True, padx=10, pady=10)
+        self.textbox.insert("1.0", ">> Logs will appear here...\n")
+        self.textbox.configure(state="disabled")
+
+    def log(self, message):
+        self.textbox.configure(state="normal")
+        self.textbox.insert("end", f"{message}\n")
+        self.textbox.see("end")
+        self.textbox.configure(state="disabled")
+
+    def clear(self):
+        self.textbox.configure(state="normal")
+        self.textbox.delete("1.0", "end")
+        self.textbox.configure(state="disabled")
 
 class MiscFrame(customtkinter.CTkFrame):
-    def __init__(self, master, add_sound_callback, **kwargs):
+    def __init__(self, master, add_sound_callback, preview_callback, render_callback, **kwargs):
         super().__init__(master, **kwargs)
-        customtkinter.CTkButton(self, text="Add Sound", command=add_sound_callback).pack(pady=10)
+        button_container = customtkinter.CTkFrame(self)
+        button_container.pack(expand=True, pady=10)
+        
+        self.res_entry = customtkinter.CTkEntry(button_container, placeholder_text="Eg. 1080x1920", width=140)
+        self.res_entry.pack(pady=(5, 10))
+        
+        self.add_sound_btn = customtkinter.CTkButton(button_container, text="Add Sound", command=add_sound_callback, width=140)
+        self.add_sound_btn.pack(pady=5)
 
+        self.preview_btn = customtkinter.CTkButton(button_container, text="Preview", command=preview_callback, width=140, corner_radius=32)
+        self.preview_btn.pack(pady=5)
+
+        self.render_btn = customtkinter.CTkButton(button_container, text="Render", command=render_callback, width=140, corner_radius=32)
+        self.render_btn.pack(pady=5)
+        
 class EditorGui:
     def __init__(self):
         self.app = customtkinter.CTk()
@@ -185,37 +224,69 @@ class EditorGui:
             except:
                 self.props_data = {}
         self.sound_path = None
+
         add_menu = CTkTitleMenu(self.app)
         add_menu_button = add_menu.add_cascade("Add Elements", fg_color="transparent", hover=False, hover_color=None)
         add_menu_dropdown = CustomDropdownMenu(widget=add_menu_button)
+
         self.listbox = CTkListbox(add_menu_dropdown, height=600, width=600, command=self.add_element)
         self.listbox.pack(fill="both", expand=True, padx=10, pady=10)
-        save_btn = add_menu.add_cascade("Save", fg_color="transparent", hover=False, hover_color=None, command=self.save_current_element)
+
+        add_menu.add_cascade("Save", fg_color="transparent", hover=False, hover_color=None, command=self.save_current_element)
+
         self.all_classes = get_exposed_classes()
         self.all_elements = sorted([cls.__name__ for cls in self.all_classes], key=str.lower)
+
         for item in self.all_elements:
             cls = next(c for c in self.all_classes if c.__name__ == item)
             name = item + " [Effect]" if class_in_manim_animations(item) and not is_mobject_class(cls) else item
             self.listbox.insert("end", name)
+
         self.search_entry = AutocompleteEntry(add_menu_dropdown, width=300, completevalues=self.all_elements)
         self.search_entry.place(x=200, y=0)
         self.search_entry.bind("<Return>", self.scroll_to_result)
+
         self.ha = Hierachy(master=self.app, width=500, height=600)
         self.ha.place(x=10, y=10)
         self.ha.listbox.bind("<<ListboxSelect>>", self.on_hierarchy_select)
         self.ha.listbox.bind("<Button-3>", self.show_hierarchy_context_menu)
+
         self.code = CodeFrame(master=self.app)
         self.code.place(x=10, y=620)
+
         self.props = Properties(master=self.app, width=600, height=900)
         self.props.place(x=1300, y=10)
         self.props.grid_propagate(False)
-        self.res_entry = customtkinter.CTkEntry(self.app, placeholder_text="Eg. 1080x1920")
-        self.res_entry.place(x=1650, y=100)
-        self.misc_frame = MiscFrame(master=self.app, add_sound_callback=self.add_sound)
-        self.misc_frame.place(x=1650, y=140)
-        customtkinter.CTkButton(self.app, text="Preview", corner_radius=70, command=self.preview_scene).place(x=1650, y=200)
-        customtkinter.CTkButton(self.app, text="Render", corner_radius=70, command=self.render_scene).place(x=1650, y=260)
+
+        self.logs_frame = LogsFrame(self.app, width=600, height=180)
+        self.logs_frame.place(x=800, y=30)
+
+        self.misc_frame = MiscFrame(
+            master=self.app,
+            add_sound_callback=self.add_sound,
+            preview_callback=self.preview_scene,
+            render_callback=self.render_scene,
+            width=160,
+            height=200
+        )
+        self.misc_frame.place(x=900, y=800)
+
+        self.app.protocol("WM_DELETE_WINDOW", self.exit_handler)
+        atexit.register(self.exit_handler)
+        
+        self.app.bind("<Control-e>", lambda e: self.add_element())
+        self.app.bind("<Control-s>", lambda e: self.save_current_element())
+        self.app.bind("<Shift-m>", self.fake_right_click)
+
         self.app.mainloop()
+
+    def exit_handler(self):
+        try:
+            self.props_file.write_text(json.dumps(self.props_data), encoding="utf-8")
+        except:
+            pass
+        self.app.destroy()
+        sys.exit()
 
     def scroll_to_result(self, event=None):
         query = self.search_entry.get().strip().lower()
@@ -269,7 +340,7 @@ class EditorGui:
             self.ha.listbox.select(index)
             self.ha.selected_index = index
             self.ha.context_menu.tk_popup(event.x_root, event.y_root)
-            
+
     def save_current_element(self):
         props = {}
         for label, w in self.props.current_props:
@@ -300,12 +371,15 @@ class EditorGui:
             self.update_code()
 
     def parse_value(self, v):
-        if isinstance(v, str) and v.startswith("$$") and v.endswith("$$"):
-            return v[2:-2]
-        try:
-            return json.loads(v)
-        except:
-            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("$") and v.endswith("$"):
+                return {"__raw__": v[1:-1]}
+            try:
+                return json.loads(v)
+            except:
+                return v
+        return v
 
     def update_code(self):
         lines = ["from manim import *", "", "class Output(Scene):", "    def construct(self):"]
@@ -318,11 +392,17 @@ class EditorGui:
             var_name = name.replace(" [Effect]", "").replace(" ", "_").replace("(", "").replace(")", "").replace(".", "_").lower()
             params = self.props_data.get(name, {})
             def format_val(v):
-                if isinstance(v, str) and v.startswith("$$") and v.endswith("$$"):
-                    return v[2:-2]
+                if isinstance(v, dict) and "__raw__" in v:
+                    return v["__raw__"]
                 if isinstance(v, str):
                     return repr(v)
                 return repr(v)
+
+            raw_params = self.props_data.get(name, {})
+            params = {
+                k: v for k, v in raw_params.items()
+                if v not in [None, ""] and (not isinstance(v, str) or "!ignore!" not in v)
+            }
             param_str = ", ".join(f"{k}={format_val(v)}" for k, v in params.items())
             if " [Effect]" in name:
                 effects.append(f"        self.play({cls_name}({param_str}))")
@@ -336,6 +416,18 @@ class EditorGui:
         self.code.textbox.configure(state="disabled")
         with open("script.py", "w", encoding="utf-8") as f:
             f.write(code)
+            
+    def fake_right_click(self, event=None):
+        x, y = self.app.winfo_pointerxy()
+        widget = self.app.winfo_containing(x, y)
+        if widget and widget == self.ha.listbox:
+            rel_y = y - widget.winfo_rooty()
+            button_height = 30
+            index = rel_y // button_height
+            if 0 <= index < len(self.ha.listbox.buttons):
+                self.ha.listbox.select(index)
+                self.ha.selected_index = index
+                self.ha.context_menu.tk_popup(x, y)
 
     def add_sound(self):
         path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.mp3 *.wav *.ogg")])
@@ -353,16 +445,30 @@ class EditorGui:
         script = "\n".join(out)
         with open("script.py", "w", encoding="utf-8") as f:
             f.write(script)
-        threading.Thread(target=lambda: os.system("manim script.py Output --renderer=opengl -p"), daemon=True).start()
-    
+
+        def run():
+            cmd = ["manim", "script.py", "Output", "--renderer=opengl", "--enable_gui", "-p"]
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in process.stdout:
+                self.logs_frame.log(line.strip())
+
+        threading.Thread(target=run, daemon=True).start()
+
     def render_scene(self):
-        res = self.res_entry.get().strip()
+        res = self.misc_frame.res_entry.get().strip()
         try:
             w, h = map(int, res.lower().split("x"))
         except:
             w, h = 1920, 1080
         with open("script.py", "w", encoding="utf-8") as f:
             f.write(self.code.textbox.get("1.0", "end-1c"))
-        threading.Thread(target=lambda: os.system(f"manim script.py Output -pqm --resolution {w},{h}"), daemon=True).start()
+
+        def run():
+            cmd = ["manim", "script.py", "Output", "-pqm", "--resolution", f"{w},{h}"]
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in process.stdout:
+                self.logs_frame.log(line.strip())
+
+        threading.Thread(target=run, daemon=True).start()
 
 EditorGui()

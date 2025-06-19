@@ -1,2 +1,4 @@
-basic things done
-next add support for multiple groups and scenes later on
+Tutorial
+
+$randomtext$ -> randomtext (and escapes the string)
+!ignore! -> removes the param
