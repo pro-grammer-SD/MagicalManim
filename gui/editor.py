@@ -438,16 +438,35 @@ class EditorGui:
     def preview_scene(self):
         lines = self.code.textbox.get("1.0", "end-1c").splitlines()
         out = []
+        inside_construct = False
+        added_embed = False
+
         for ln in lines:
+            stripped = ln.strip()
+
+            if "self.interactive_embed()" in stripped:
+                continue
+
+            if stripped.startswith("def construct"):
+                inside_construct = True
+
+            if inside_construct and not added_embed:
+                if stripped == "" or (stripped.startswith("def") and not stripped.startswith("def construct")):
+                    out.append("        self.interactive_embed()")
+                    added_embed = True
+
             out.append(ln)
-            if ln.strip().startswith("def construct"):
-                out.append("        self.interactive_embed()")
+
+        if not added_embed:
+            out.append("        self.interactive_embed()")
+
         script = "\n".join(out)
         with open("script.py", "w", encoding="utf-8") as f:
             f.write(script)
 
         def run():
             cmd = ["manim", "script.py", "Output", "--renderer=opengl", "--enable_gui", "-p"]
+            self.logs_frame.log(">> " + " ".join(cmd))
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in process.stdout:
                 self.logs_frame.log(line.strip())
