@@ -489,5 +489,5 @@ class EditorGui:
                 self.logs_frame.log(line.strip())
 
         threading.Thread(target=run, daemon=True).start()
-
+        
 EditorGui()
