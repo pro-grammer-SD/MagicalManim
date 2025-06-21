@@ -1,3 +1,0 @@
-# This file is used internally by FFMPEG.
-file 'file:C:/Users/SOUMALYA/Desktop/pyp/MagicalManim/media/videos/1080p60/partial_movie_files/MyScene/3977891868_3653056185_223132457.mp4'
-file 'file:C:/Users/SOUMALYA/Desktop/pyp/MagicalManim/media/videos/1080p60/partial_movie_files/MyScene/2852726489_1628762937_3481380946.mp4'
