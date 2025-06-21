@@ -1,2 +1,5 @@
 # Local Netlify folder
 .netlify
+
+# Python Generated Objects
+__pycache__/
