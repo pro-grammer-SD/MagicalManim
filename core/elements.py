@@ -6,8 +6,12 @@ import manim
 def get_exposed_classes(package_name: str = "manim"):
     package = importlib.import_module(package_name)
     classes = set()
+    visited = set()
 
     def walk_module(mod):
+        if mod in visited:
+            return
+        visited.add(mod)
         for attr_name in dir(mod):
             if attr_name.startswith("_"):
                 continue
@@ -21,11 +25,18 @@ def get_exposed_classes(package_name: str = "manim"):
                 continue
 
     walk_module(package)
+
+    for _, name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
+        try:
+            mod = importlib.import_module(name)
+            walk_module(mod)
+        except Exception:
+            continue
+
     return list(classes)
 
 def get_class_init_params(cls):
     props = {}
-
     try:
         sig = inspect.signature(cls)
     except (TypeError, ValueError):
@@ -45,13 +56,9 @@ def get_class_init_params(cls):
             else "str"
         )
         default = (
-            param.default
-            if param.default is not inspect.Parameter.empty
-            else ""
+            param.default if param.default is not inspect.Parameter.empty else ""
         )
-
         props[name] = {"type": param_type, "default": default}
-
     return props
 
 def is_mobject_class(cls):
@@ -59,11 +66,13 @@ def is_mobject_class(cls):
         return issubclass(cls, manim.mobject.mobject.Mobject)
     except Exception:
         return False
-    
+
 def class_in_manim_animations(class_name: str) -> bool:
     try:
         manim_animations = importlib.import_module("manim.animation")
-        for loader, modname, ispkg in pkgutil.walk_packages(manim_animations.__path__, manim_animations.__name__ + "."):
+        for _, modname, _ in pkgutil.walk_packages(
+            manim_animations.__path__, manim_animations.__name__ + "."
+        ):
             try:
                 module = importlib.import_module(modname)
                 for name, obj in inspect.getmembers(module, inspect.isclass):
