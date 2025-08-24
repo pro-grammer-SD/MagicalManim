@@ -1,0 +1,4 @@
+elements:
+  Cube: {}
+sound_path: null
+script_path: script.py
