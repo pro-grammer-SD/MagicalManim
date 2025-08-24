@@ -6,12 +6,12 @@ Magical Manim is a modern, custom GUI wrapper around [Manim](https://www.manim.c
 
 ## 🚀 Features
 
-* 🎨 **PySide6 GUI** — clean, modern, and easy to navigate.
+* 🎨 **PySide6 GUI (Beta)** — clean, modern, and easy to navigate.
 * ⚡ **One-click preview** — run Manim scenes instantly, no terminal commands needed.
 * 🌀 **Interactive mode injection** — auto-adds `self.interactive_embed()` without duplicates.
 * 🖼️ **Custom icons** — pretty app icons for Windows and taskbar.
 * 🛠️ **Syntax helpers** — shortcuts for writing Manim scripts with less pain.
-* 🤖 **Gemini Assisted Code Gen**
+* 🤖 **Gemini Assisted Code Gen (Beta)**
 - faster coding at your fingertips.
 
 ---
