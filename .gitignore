@@ -3,7 +3,16 @@ media/
 *.json
 *.yaml
 .env
+
+# Allow specific folders first
+!gui/
+!core/
+!tests/
+
+# Ignore all .py files
 *.py
+
+# Re-allow .py files in those folders
 !gui/**/*.py
 !core/**/*.py
 !tests/**/*.py
