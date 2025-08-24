@@ -1,4 +1,9 @@
 **/__pycache__/
+media/
 *.json
+*.yaml
 .env
 *.py
+!gui/**/*.py
+!core/**/*.py
+!tests/**/*.py
