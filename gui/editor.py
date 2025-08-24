@@ -18,7 +18,7 @@ from manim import *
 import qt_themes
 
 sys.path.append(str(Path(__file__).parent.parent))
-from core.elements import get_exposed_classes, get_class_init_params
+from core.elements import get_exposed_classes, get_class_init_params, class_in_manim_animations
 
 from google import genai
 from google.genai import types
@@ -89,6 +89,26 @@ class PropertiesTable(QTableWidget):
         self.setItem(r, 0, QTableWidgetItem(key))
         self.setCellWidget(r, 1, widget)
         self._widgets[key] = widget
+        
+    def _focused_lineedit(self):
+        w = QApplication.focusWidget()
+        return w if isinstance(w, QLineEdit) else None
+
+    def surround_with_dollars(self):
+        e = self._focused_lineedit()
+        if e:
+            txt = e.text()
+            if not (txt.startswith("$") and txt.endswith("$")):
+                e.setText(f"${txt}$")
+            self.emit_values()
+
+    def surround_with_exclaim(self):
+        e = self._focused_lineedit()
+        if e:
+            txt = e.text()
+            if not (txt.startswith("!") and txt.endswith("!")):
+                e.setText(f"!{txt}!")
+            self.emit_values()
 
     def show_properties(self, cls, params=None):
         self.clear_props()
@@ -113,8 +133,12 @@ class PropertiesTable(QTableWidget):
                 slider.setMaximum(10000)
                 slider.setValue(int(float(val)*100))
                 entry = QLineEdit(str(val))
-                slider.valueChanged.connect(lambda v, e=entry: e.setText(str(round(v/100,2))))
-                entry.editingFinished.connect(lambda s=entry, sl=slider: sl.setValue(int(float(s.text())*100)))
+                def strip_dollar(text: str) -> str:
+                    if text.startswith("$") and text.endswith("$"):
+                        return text[1:-1]
+                    return text
+                slider.valueChanged.connect(lambda v, e=entry: e.setText(str(round(v/100, 2))))
+                entry.editingFinished.connect(lambda s=entry, sl=slider: sl.setValue(int(float(strip_dollar(s.text())) * 100)))
                 lay.addWidget(slider)
                 lay.addWidget(entry)
                 self._add_row(name, wrap)
@@ -175,6 +199,7 @@ class EditorWindow(QMainWindow):
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(120)
         self.scene_elements = []
+        self.props = PropertiesTable()
         self.setup_actions()
         self.setup_central()
         self.setup_docks()
@@ -211,6 +236,14 @@ class EditorWindow(QMainWindow):
         act_del.setShortcut("Del")
         act_del.triggered.connect(self.delete_selected)
         editm.addAction(act_del)
+        act_wrap_dollar = QAction("Surround with $$", self)
+        act_wrap_dollar.setShortcut("Ctrl+L")
+        act_wrap_dollar.triggered.connect(self.props.surround_with_dollars)
+        editm.addAction(act_wrap_dollar)
+        act_wrap_exclaim = QAction("Surround with !!", self)
+        act_wrap_exclaim.setShortcut("Ctrl+I")
+        act_wrap_exclaim.triggered.connect(self.props.surround_with_exclaim)
+        editm.addAction(act_wrap_exclaim)
         runm = bar.addMenu("Run")
         act_preview = QAction("Preview", self)
         act_preview.triggered.connect(self.preview_scene)
@@ -282,7 +315,6 @@ class EditorWindow(QMainWindow):
         self.elements_dock.raise_()
 
         self.props_dock = QDockWidget("Properties", self)
-        self.props = PropertiesTable()
         self.props.valueChanged.connect(self.on_props_changed)
         self.props_dock.setWidget(self.props)
         self.addDockWidget(Qt.RightDockWidgetArea, self.props_dock)
@@ -504,9 +536,30 @@ class EditorWindow(QMainWindow):
         item = self.elements.currentItem()
         if not item:
             return
-        clone = QTreeWidgetItem([item.text(0) + "_copy"])
-        clone.setData(0, Qt.UserRole, item.data(0, Qt.UserRole))
+        name = item.text(0)
+        cls = item.data(0, Qt.UserRole).get("cls")
+        props = dict(item.data(0, Qt.UserRole).get("props", {}))
+
+        # ensure unique name
+        base_name = name.split(" (")[0]
+        cls_name = name.split(" (")[1][:-1] if "(" in name else name
+        count = 1
+        new_name = f"{base_name}_copy"
+        while new_name in self.current_elements_names():
+            count += 1
+            new_name = f"{base_name}_copy{count}"
+        display_name = f"{new_name} ({cls_name})"
+
+        # create tree item
+        clone = QTreeWidgetItem([display_name])
+        clone.setData(0, Qt.UserRole, {"cls": cls, "props": props})
         self.elements.addTopLevelItem(clone)
+
+        # store props
+        self.props_data[display_name] = props
+
+        # refresh code
+        self.update_code()
 
     def delete_selected(self):
         item = self.elements.currentItem()
@@ -520,7 +573,7 @@ class EditorWindow(QMainWindow):
         self.update_code()
         code_path = Path("temp_scene.py")
         code_path.write_text(self.code.toPlainText(), encoding="utf-8")
-        cmd = [sys.executable, "-m", "manim", str(code_path), "-pql"]
+        cmd = [sys.executable, "-m", "manim", str(code_path), "-pql", "-p"]
         self.logs.appendPlainText("Previewing scene...")
         self._run_cmd(cmd)
 
@@ -530,7 +583,7 @@ class EditorWindow(QMainWindow):
         code_path = Path("temp_scene.py")
         code_path.write_text(self.code.toPlainText(), encoding="utf-8")
         w, h = self.res_w.value(), self.res_h.value()
-        cmd = [sys.executable, "-m", "manim", str(code_path), "-ql", f"--media_dir=media", f"--custom_framerate=60", f"--resolution={w}x{h}"]
+        cmd = [sys.executable, "-m", "manim", str(code_path), "-ql", f"--media_dir=media", f"--fps=60", f"--resolution={w},{h}", "-p"]
         self.logs.appendPlainText("Rendering scene...")
         self._run_cmd(cmd)
 
@@ -550,9 +603,18 @@ class EditorWindow(QMainWindow):
         item = self.elements.currentItem()
         if not item:
             return
+
+        # Update props_data with the current element's properties
         self.props_data[item.text(0)] = item.data(0, Qt.UserRole).get("props", {})
+
+        # Save props.json
         self.props_path.write_text(json.dumps(self.props_data, indent=4), encoding="utf-8")
         self.logs.appendPlainText(f"Saved properties of {item.text(0)}")
+
+        # Refresh code and write to script.py
+        self.update_code()
+        Path("script.py").write_text(self.code.toPlainText(), encoding="utf-8")
+        self.logs.appendPlainText("Synced props into script.py")
 
     def export_props(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export Props JSON", "", "JSON Files (*.json)")
@@ -603,10 +665,21 @@ class EditorWindow(QMainWindow):
         self.logs.appendPlainText(f"Added sound: {path}")
 
     def update_code(self):
+        def format_param(k, v):
+            if isinstance(v, str):
+                if v.startswith("!") and v.endswith("!"):
+                    return None
+                elif v.startswith("$") and v.endswith("$"):
+                    inner = v[1:-1]
+                    return f"{k}={inner}"
+                else:
+                    return f"{k}={repr(v)}"
+            else:
+                return f"{k}={v}"
+
         self.sync_current_props()
         if self.ai_generated_code:
             code = self.ai_generated_code
-            
             lines = code.splitlines()
             insert_idx = None
             for i, line in enumerate(lines):
@@ -614,41 +687,63 @@ class EditorWindow(QMainWindow):
                     insert_idx = i + 1
                     break
             if insert_idx:
-                
-                if self.sound_path and f'self.add_sound' not in "\n".join(lines):
+                if self.sound_path and "self.add_sound" not in "\n".join(lines):
                     lines.insert(insert_idx, f'        self.add_sound(r"{self.sound_path}")')
-                
+
                 for i in range(self.elements.topLevelItemCount()):
                     item = self.elements.topLevelItem(i)
                     name = item.text(0)
                     cls_name = name.split(" (")[1][:-1] if "(" in name else name
-                    var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
                     raw_params = self.props_data.get(name, {})
-                    param_str = ", ".join(f"{k}={repr(v) if isinstance(v,str) else v}" for k,v in raw_params.items() if v not in [None,""])
-                    
-                    pattern = re.compile(rf"{var_name}\s*=\s*{cls_name}\(.*\)")
-                    replaced = False
-                    for j, ln in enumerate(lines):
-                        if pattern.match(ln.strip()):
-                            lines[j] = f"        {var_name} = {cls_name}({param_str})"
-                            replaced = True
-                            break
-                    if not replaced:
-                        lines.insert(insert_idx, f"        {var_name} = {cls_name}({param_str})")
+
+                    param_parts = []
+                    for k, v in raw_params.items():
+                        part = format_param(k, v)
+                        if part:
+                            param_parts.append(part)
+                    param_str = ", ".join(param_parts)
+
+                    cls = self.class_map.get(cls_name)
+                    if not cls:
+                        continue
+
+                    if class_in_manim_animations(cls):
+                        new_line = f"        self.play({cls_name}({param_str}))"
+                    else:
+                        var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
+                        new_line = f"        {var_name} = {cls_name}({param_str})"
+
+                    lines.insert(insert_idx, new_line)
+
             code = "\n".join(lines)
         else:
-            
             lines = ["from manim import *", "", "class Output(Scene):", "    def construct(self):"]
             if self.sound_path:
                 lines.append(f'        self.add_sound(r"{self.sound_path}")')
+
             for i in range(self.elements.topLevelItemCount()):
                 item = self.elements.topLevelItem(i)
                 name = item.text(0)
                 cls_name = name.split(" (")[1][:-1] if "(" in name else name
-                var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
                 raw_params = self.props_data.get(name, {})
-                param_str = ", ".join(f"{k}={repr(v) if isinstance(v,str) else v}" for k,v in raw_params.items() if v not in [None,""])
-                lines.append(f"        {var_name} = {cls_name}({param_str})")
+
+                param_parts = []
+                for k, v in raw_params.items():
+                    part = format_param(k, v)
+                    if part:
+                        param_parts.append(part)
+                param_str = ", ".join(param_parts)
+
+                cls = self.class_map.get(cls_name)
+                if not cls:
+                    continue
+
+                if class_in_manim_animations(cls):
+                    lines.append(f"        self.play({cls_name}({param_str}))")
+                else:
+                    var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
+                    lines.append(f"        {var_name} = {cls_name}({param_str})")
+
             code = "\n".join(lines)
 
         self.code.blockSignals(True)

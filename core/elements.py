@@ -1,7 +1,7 @@
+from manim import Animation
 import inspect
 import importlib
 import pkgutil
-import manim
 
 def get_exposed_classes(package_name: str = "manim"):
     package = importlib.import_module(package_name)
@@ -61,25 +61,9 @@ def get_class_init_params(cls):
         props[name] = {"type": param_type, "default": default}
     return props
 
-def is_mobject_class(cls):
+def class_in_manim_animations(cls):
     try:
-        return issubclass(cls, manim.mobject.mobject.Mobject)
+        return inspect.isclass(cls) and issubclass(cls, Animation)
     except Exception:
         return False
-
-def class_in_manim_animations(class_name: str) -> bool:
-    try:
-        manim_animations = importlib.import_module("manim.animation")
-        for _, modname, _ in pkgutil.walk_packages(
-            manim_animations.__path__, manim_animations.__name__ + "."
-        ):
-            try:
-                module = importlib.import_module(modname)
-                for name, obj in inspect.getmembers(module, inspect.isclass):
-                    if name == class_name:
-                        return True
-            except Exception:
-                continue
-    except Exception:
-        return False
-    return False
+    

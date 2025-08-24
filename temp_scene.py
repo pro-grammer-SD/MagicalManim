@@ -2,8 +2,5 @@ from manim import *
 
 class Output(Scene):
     def construct(self):
-        triangle = Triangle()
-        set_fill_1 = set_fill(opacity=0.7)
-        set_stroke_2 = set_stroke(width=4)
-        play_3 = play()
-        wait_4 = wait(arg0=1)
+        circle = Circle(radius=1.3, color='#00ff7f')
+        self.play(Create(mobject=circle, lag_ratio=1.0, introducer=True))
