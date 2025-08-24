@@ -1,1 +1,26 @@
-{"ArcPolygon": {}, "ArcPolygon (2)": {"introducer": "True", "lag_ratio": 1.0, "mobject": "arcpolygon"}, "Create [Effect]": {}, "FadeIn [Effect]": {}, "Text": {}, "Circle": {"radius": 1.0, "color": {"__raw__": "$RED$"}}}
+{
+    "cube (Cube)": {
+        "fill_color": null,
+        "fill_opacity": 0.75,
+        "side_length": 2,
+        "stroke_color": null
+    },
+    "shift_1 (shift)": {
+        "arg0": null
+    },
+    "add_2 (add)": {
+        "arg0": null
+    },
+    "play_3 (play)": {
+        "arg0": null
+    },
+    "play_4 (play)": {
+        "arg0": null
+    },
+    "play_5 (play)": {
+        "arg0": null
+    },
+    "wait_6 (wait)": {
+        "arg0": 1
+    }
+}

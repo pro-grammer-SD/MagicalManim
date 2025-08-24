@@ -1,10 +1,10 @@
+import inspect
 import re
 import sys
 import os
 import json
 import subprocess
 from pathlib import Path
-from functools import lru_cache
 from dotenv import load_dotenv
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QColor
@@ -36,7 +36,34 @@ class ProcThread(QThread):
         p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for ln in p.stdout:
             self.line.emit(ln.rstrip())
+            
+class AIThread(QThread):
+    finished = Signal(str)
+    log = Signal(str)
 
+    def __init__(self, prompt):
+        super().__init__()
+        self.prompt = prompt
+
+    def run(self):
+        try:
+            self.log.emit(f"Generating AI code for: {self.prompt}")
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        "You are a code generation bot. Only output working Python Manim code, "
+                        "no explanations or extra text. Generate complete, functional, properly formatted Python code."
+                    )
+                ),
+                contents=self.prompt
+            ).text
+            code = re.sub(r'^```[\w]*\s*', '', response)
+            code = re.sub(r'\s*```$', '', code).strip()
+            self.finished.emit(code)
+        except Exception as e:
+            self.log.emit(f"AI generation failed: {e}")
+            self.finished.emit("")
 class PropertiesTable(QTableWidget):
     valueChanged = Signal(dict)
     def __init__(self, parent=None):
@@ -63,15 +90,20 @@ class PropertiesTable(QTableWidget):
         self.setCellWidget(r, 1, widget)
         self._widgets[key] = widget
 
-    def show_properties(self, cls, item=None):
-        if not cls or item is None:
+    def show_properties(self, cls, params=None):
+        self.clear_props()
+        if not cls:
             return
-        props = item.data(0, Qt.UserRole).get("props", {})
-        self.props.clear_props()
-        cls_params = get_class_init_params(cls)
+        if params is None:
+            params = {}
 
-        for key, meta in cls_params.items():
-            val = props.get(key, meta.get("default", ""))
+        sig = inspect.signature(cls.__init__)
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            val = params.get(name, getattr(param, "default", ""))
+            if val is inspect.Parameter.empty:
+                val = ""
             if isinstance(val, (int, float)):
                 wrap = QWidget()
                 lay = QHBoxLayout(wrap)
@@ -85,16 +117,14 @@ class PropertiesTable(QTableWidget):
                 entry.editingFinished.connect(lambda s=entry, sl=slider: sl.setValue(int(float(s.text())*100)))
                 lay.addWidget(slider)
                 lay.addWidget(entry)
-                self.props._add_row(key, wrap)
+                self._add_row(name, wrap)
             elif isinstance(val, str):
-                entry = QLineEdit(val)
-                self.props._add_row(key, entry)
+                self._add_row(name, QLineEdit(val))
             elif isinstance(val, QColor):
-                self.props.add_color_picker(val.name())
-        extra = QLineEdit()
-        extra.setPlaceholderText("k=v, k2=v2")
-        self.props._add_row("kwargs", extra)
-
+                self.add_color_picker(val.name())
+            else:
+                self._add_row(name, QLineEdit(repr(val)))
+                
     def add_color_picker(self, existing_hex=None):
         btn = QPushButton(existing_hex or "Pick color")
         def pick():
@@ -137,6 +167,7 @@ class EditorWindow(QMainWindow):
             except:
                 self.props_data = {}
         self.sound_path = None
+        self.ai_generated_code = ""
         self.all_classes = get_exposed_classes()
         self.all_names = sorted([c.__name__ for c in self.all_classes], key=str.lower)
         self.class_map = {c.__name__: c for c in self.all_classes}
@@ -153,6 +184,10 @@ class EditorWindow(QMainWindow):
     def setup_actions(self):
         bar = self.menuBar()
         filem = bar.addMenu("File")
+        act_save_script = QAction("Save Script", self)
+        act_save_script.setShortcut("Ctrl+Shift+S")
+        act_save_script.triggered.connect(self.save_script)
+        filem.addAction(act_save_script)
         act_save_props = QAction("Save Element Props", self)
         act_save_props.setShortcut("Ctrl+S")
         act_save_props.triggered.connect(self.save_current_element)
@@ -304,14 +339,13 @@ class EditorWindow(QMainWindow):
             return
         cls = item.data(0, Qt.UserRole).get("cls")
         props = item.data(0, Qt.UserRole).get("props", {})
-
-        # Keep numbers as float/int if possible
+        
         for k, v in vals.items():
             try:
                 if isinstance(v, str):
                     if re.match(r"^-?\d+(\.\d+)?$", v):
                         props[k] = float(v) if "." in v else int(v)
-                    elif re.match(r"^[A-Z_]+$", v):  # Manim constant
+                    elif re.match(r"^[A-Z_]+$", v):  
                         props[k] = v
                     else:
                         props[k] = v
@@ -343,62 +377,68 @@ class EditorWindow(QMainWindow):
     def rebuild_elements_tree_from_code(self, code_text):
         self.elements.clear()
         self.props_data.clear()
-        
         import ast
-        parsed = False
-        # Attempt AST parse wrapped in a dummy class
-        try:
-            code_wrapped = "class DummyScene(Scene):\n"
-            for line in code_text.splitlines():
-                code_wrapped += "    " + line + "\n"
-            tree = ast.parse(code_wrapped)
-            parsed = True
-        except Exception:
-            parsed = False
 
-        if parsed:
-            for node in tree.body[0].body:  # inside DummyScene
-                if isinstance(node, ast.Assign):
-                    if not isinstance(node.targets[0], ast.Name):
-                        continue
-                    var_name = node.targets[0].id
-                    if isinstance(node.value, ast.Call):
-                        if isinstance(node.value.func, ast.Name):
-                            cls_name = node.value.func.id
-                        else:
-                            cls_name = getattr(node.value.func, "attr", "Unknown")
-                        params = {}
-                        for kw in node.value.keywords:
-                            try:
-                                params[kw.arg] = ast.literal_eval(kw.value)
-                            except:
-                                params[kw.arg] = None
-                        display_name = f"{var_name} ({cls_name})"
-                        item = QTreeWidgetItem([display_name])
-                        self.elements.addTopLevelItem(item)
-                        self.props_data[display_name] = params
-                        cls = self.class_map.get(cls_name)
-                        item.setData(0, Qt.UserRole, {"cls": cls, "props": params})
-        else:
-            # Fallback crude regex parse: var = ClassName(param=value,...)
-            pattern = r"(\w+)\s*=\s*(\w+)\((.*)\)"
-            for line in code_text.splitlines():
-                line = line.strip()
-                m = re.match(pattern, line)
-                if m:
-                    var_name, cls_name, param_str = m.groups()
-                    params = {}
-                    for kv in param_str.split(","):
-                        if "=" in kv:
-                            k, v = kv.split("=", 1)
-                            params[k.strip()] = v.strip()
-                    display_name = f"{var_name} ({cls_name})"
-                    item = QTreeWidgetItem([display_name])
-                    self.elements.addTopLevelItem(item)
-                    self.props_data[display_name] = params
-                    cls = self.class_map.get(cls_name)
-                    item.setData(0, Qt.UserRole, {"cls": cls, "props": params})
-                    
+        try:
+            if "class " in code_text and "Scene" in code_text:
+                tree = ast.parse(code_text)
+            else:
+                code_wrapped = "class DummyScene(Scene):\n"
+                for line in code_text.splitlines():
+                    code_wrapped += "    " + line + "\n"
+                tree = ast.parse(code_wrapped)
+        except Exception as e:
+            self.logs.appendPlainText(f"Failed to parse code: {e}")
+            return
+
+        def extract_calls(node):
+            elements = []
+            if isinstance(node, ast.Assign):
+                if isinstance(node.value, ast.Call):
+                    elements.append((node.targets[0].id, node.value))
+            elif isinstance(node, ast.Expr):
+                if isinstance(node.value, ast.Call):
+                    call = node.value
+                    if hasattr(call.func, "id") or hasattr(call.func, "attr"):
+                        elements.append((None, call))
+            for child in ast.iter_child_nodes(node):
+                elements.extend(extract_calls(child))
+            return elements
+
+        scene_body = []
+        
+        for n in tree.body:
+            if isinstance(n, ast.ClassDef):
+                for base in n.bases:
+                    if getattr(base, "id", None) == "Scene":
+                        scene_body = n.body
+                        break
+
+        calls = []
+        for node in scene_body:
+            calls.extend(extract_calls(node))
+
+        for idx, (var_name, call) in enumerate(calls):
+            cls_node = call.func
+            cls_name = cls_node.id if isinstance(cls_node, ast.Name) else getattr(cls_node, "attr", "Unknown")
+            params = {}
+            for i, arg in enumerate(call.args):
+                try:
+                    params[f"arg{i}"] = ast.literal_eval(arg)
+                except:
+                    params[f"arg{i}"] = None
+            for kw in call.keywords:
+                try:
+                    params[kw.arg] = ast.literal_eval(kw.value)
+                except:
+                    params[kw.arg] = None
+            display_name = f"{var_name or f'{cls_name}_{idx}'} ({cls_name})"
+            item = QTreeWidgetItem([display_name])
+            self.elements.addTopLevelItem(item)
+            self.props_data[display_name] = params
+            cls = self.class_map.get(cls_name)
+            item.setData(0, Qt.UserRole, {"cls": cls, "props": params})
+            
     def add_element_from_pool(self):
         it = self.elements_list.currentItem()
         if not it:
@@ -441,12 +481,11 @@ class EditorWindow(QMainWindow):
             return
         cls = data.get("cls")
         
-        # Show properties without updating code yet
         self.props.show_properties(cls)
         if "color" in get_class_init_params(cls):
             self.props.add_color_picker()
             
-        self.props.valueChanged.disconnect()  # disconnect previous connections
+        self.props.valueChanged.disconnect()
         self.props.valueChanged.connect(lambda v, it=item: self._update_element_props(it, v))
 
     def _update_element_props(self, item, vals):
@@ -477,6 +516,7 @@ class EditorWindow(QMainWindow):
             self.update_code()
 
     def preview_scene(self):
+        self.sync_current_props()
         self.update_code()
         code_path = Path("temp_scene.py")
         code_path.write_text(self.code.toPlainText(), encoding="utf-8")
@@ -485,6 +525,7 @@ class EditorWindow(QMainWindow):
         self._run_cmd(cmd)
 
     def render_scene(self):
+        self.sync_current_props()
         self.update_code()
         code_path = Path("temp_scene.py")
         code_path.write_text(self.code.toPlainText(), encoding="utf-8")
@@ -497,7 +538,14 @@ class EditorWindow(QMainWindow):
         self.proc = ProcThread(cmd)
         self.proc.line.connect(lambda ln: self.logs.appendPlainText(ln))
         self.proc.start()
-
+        
+    def save_script(self):
+        code_text = self.code.toPlainText()
+        path, _ = QFileDialog.getSaveFileName(self, "Save Script", "script.py", "Python Files (*.py)")
+        if path:
+            Path(path).write_text(code_text, encoding="utf-8")
+            self.logs.appendPlainText(f"Saved script to {path}")
+            
     def save_current_element(self):
         item = self.elements.currentItem()
         if not item:
@@ -516,7 +564,7 @@ class EditorWindow(QMainWindow):
             all_props[itm.text(0)] = itm.data(0, Qt.UserRole).get("props", {})
         Path(path).write_text(json.dumps(all_props, indent=4), encoding="utf-8")
         self.logs.appendPlainText(f"Exported props to {path}")
-
+        
     def import_props(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Props JSON", "", "JSON Files (*.json)")
         if not path:
@@ -555,48 +603,90 @@ class EditorWindow(QMainWindow):
         self.logs.appendPlainText(f"Added sound: {path}")
 
     def update_code(self):
-        lines = ["from manim import *", "", "class Output(Scene):", "    def construct(self):"]
-        if self.sound_path:
-            lines.append(f'        self.add_sound(r"{self.sound_path}")')
-
-        effects = []
-        for i in range(self.elements.topLevelItemCount()):
-            item = self.elements.topLevelItem(i)
-            name = item.text(0)
-            cls_name = name.split(" (")[1][:-1] if "(" in name else name
-            var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
-            raw_params = self.props_data.get(name, {})
-
-            param_str = ", ".join(f"{k}={repr(v) if isinstance(v,str) else v}" for k,v in raw_params.items() if v not in [None,""])
-            if "Effect" in name:
-                effects.append(f"        self.play({cls_name}({param_str}))")
-            else:
+        self.sync_current_props()
+        if self.ai_generated_code:
+            code = self.ai_generated_code
+            
+            lines = code.splitlines()
+            insert_idx = None
+            for i, line in enumerate(lines):
+                if line.strip().startswith("def construct"):
+                    insert_idx = i + 1
+                    break
+            if insert_idx:
+                
+                if self.sound_path and f'self.add_sound' not in "\n".join(lines):
+                    lines.insert(insert_idx, f'        self.add_sound(r"{self.sound_path}")')
+                
+                for i in range(self.elements.topLevelItemCount()):
+                    item = self.elements.topLevelItem(i)
+                    name = item.text(0)
+                    cls_name = name.split(" (")[1][:-1] if "(" in name else name
+                    var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
+                    raw_params = self.props_data.get(name, {})
+                    param_str = ", ".join(f"{k}={repr(v) if isinstance(v,str) else v}" for k,v in raw_params.items() if v not in [None,""])
+                    
+                    pattern = re.compile(rf"{var_name}\s*=\s*{cls_name}\(.*\)")
+                    replaced = False
+                    for j, ln in enumerate(lines):
+                        if pattern.match(ln.strip()):
+                            lines[j] = f"        {var_name} = {cls_name}({param_str})"
+                            replaced = True
+                            break
+                    if not replaced:
+                        lines.insert(insert_idx, f"        {var_name} = {cls_name}({param_str})")
+            code = "\n".join(lines)
+        else:
+            
+            lines = ["from manim import *", "", "class Output(Scene):", "    def construct(self):"]
+            if self.sound_path:
+                lines.append(f'        self.add_sound(r"{self.sound_path}")')
+            for i in range(self.elements.topLevelItemCount()):
+                item = self.elements.topLevelItem(i)
+                name = item.text(0)
+                cls_name = name.split(" (")[1][:-1] if "(" in name else name
+                var_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name.split(" (")[0]).lower()
+                raw_params = self.props_data.get(name, {})
+                param_str = ", ".join(f"{k}={repr(v) if isinstance(v,str) else v}" for k,v in raw_params.items() if v not in [None,""])
                 lines.append(f"        {var_name} = {cls_name}({param_str})")
-        lines.extend(effects)
-        code = "\n".join(lines)
+            code = "\n".join(lines)
+
         self.code.blockSignals(True)
         self.code.setPlainText(code)
         self.code.blockSignals(False)
         Path("script.py").write_text(code, encoding="utf-8")
         
+    def sync_current_props(self):
+        item = self.elements.currentItem()
+        if item:
+            self.props_data[item.text(0)] = self.props.values()
+        
     def generate_with_ai(self):
+        prompt = self.ai_input.text().strip()
+        if not prompt:
+            return
         if not client:
             self.logs.appendPlainText("No Gemini API key provided")
             return
-        prompt = self.ai_input.text()
-        if not prompt.strip():
-            return
-        self.logs.appendPlainText(f"Generating AI code for: {prompt}")
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction="You are a code generation bot. You only output code—never explanations or extra text. Generate correct, working Python code for Manim scenes based on the user’s instructions. Ensure the code is complete, functional, and properly formatted."
-            ),
-            contents=prompt
-        ).text
-        self.ai_output.setPlainText(response)
-        self.code.setPlainText(response)
-        self.rebuild_elements_tree_from_code(response)
+
+        self.ai_btn.setEnabled(False)
+        self.logs.appendPlainText(f"Starting AI generation for: {prompt}")
+
+        def on_finished(code_text):
+            self.ai_btn.setEnabled(True)
+            if code_text:
+                self.ai_generated_code = code_text  # store full AI code for retention
+                self.ai_output.setPlainText(code_text)
+                self.code.setPlainText(code_text)
+                self.rebuild_elements_tree_from_code(code_text)
+                self.update_code()  # merge current props and sound
+            else:
+                self.logs.appendPlainText("AI generation returned empty code")
+
+        self.ai_thread = AIThread(prompt)
+        self.ai_thread.finished.connect(on_finished)
+        self.ai_thread.log.connect(lambda ln: self.logs.appendPlainText(ln))
+        self.ai_thread.start()
         
 if __name__ == "__main__":
     app = QApplication(sys.argv)
