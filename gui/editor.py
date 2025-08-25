@@ -2,12 +2,14 @@ import inspect
 import re
 import sys
 import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
 import json
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QDockWidget, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -15,7 +17,6 @@ from PySide6.QtWidgets import (
     QHeaderView, QSlider, QMessageBox, QColorDialog, QSpinBox, QMenu
 )
 from manim import *
-import qt_themes
 
 sys.path.append(str(Path(__file__).parent.parent))
 from core.elements import get_exposed_classes, get_class_init_params, class_in_manim_animations
@@ -109,7 +110,7 @@ class PropertiesTable(QTableWidget):
             if not (txt.startswith("!") and txt.endswith("!")):
                 e.setText(f"!{txt}!")
             self.emit_values()
-
+            
     def show_properties(self, cls, params=None):
         self.clear_props()
         if not cls:
@@ -127,35 +128,37 @@ class PropertiesTable(QTableWidget):
             if isinstance(val, (int, float)):
                 wrap = QWidget()
                 lay = QHBoxLayout(wrap)
-                lay.setContentsMargins(0,0,0,0)
+                lay.setContentsMargins(0, 0, 0, 0)
+                lay.setSpacing(4)
                 slider = QSlider(Qt.Horizontal)
                 slider.setMinimum(-10000)
                 slider.setMaximum(10000)
-                slider.setValue(int(float(val)*100))
+                slider.setValue(int(float(val) * 100))
                 entry = QLineEdit(str(val))
-                def strip_dollar(text: str) -> str:
-                    if text.startswith("$") and text.endswith("$"):
-                        return text[1:-1]
-                    return text
-                slider.valueChanged.connect(lambda v, e=entry: e.setText(str(round(v/100, 2))))
-                entry.editingFinished.connect(lambda s=entry, sl=slider: sl.setValue(int(float(strip_dollar(s.text())) * 100)))
+                entry.setMaximumWidth(80)
+                slider.valueChanged.connect(lambda v, e=entry: e.setText(str(round(v / 100, 2))))
+                entry.editingFinished.connect(lambda s=entry, sl=slider: sl.setValue(int(float(s.text()) * 100)))
                 lay.addWidget(slider)
                 lay.addWidget(entry)
                 self._add_row(name, wrap)
             elif isinstance(val, str):
-                self._add_row(name, QLineEdit(val))
+                le = QLineEdit(val)
+                le.setMinimumHeight(28)
+                self._add_row(name, le)
             elif isinstance(val, QColor):
                 self.add_color_picker(val.name())
             else:
                 self._add_row(name, QLineEdit(repr(val)))
-                
+
     def add_color_picker(self, existing_hex=None):
         btn = QPushButton(existing_hex or "Pick color")
+        btn.setMinimumHeight(28)
+        btn.setStyleSheet(f"background:{existing_hex or '#FFFFFF'};")
         def pick():
             col = QColorDialog.getColor()
             if col.isValid():
                 btn.setText(col.name())
-                btn.setStyleSheet(f"background:{col.name()}")
+                btn.setStyleSheet(f"background:{col.name()};")
                 self.emit_values()
         btn.clicked.connect(pick)
         self._add_row("color", btn)
@@ -785,7 +788,11 @@ class EditorWindow(QMainWindow):
         
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    qt_themes.set_theme("blender")
+    app.setStyle("Fusion")
+    app.setStyleSheet(Path("styles.qss").read_text())
+    font_id = QFontDatabase.addApplicationFont("fonts/Inter_18pt-Regular.ttf")
+    family = QFontDatabase.applicationFontFamilies(font_id)[0]
+    app.setFont(QFont(family, 10))
     w = EditorWindow()
     w.show()
     sys.exit(app.exec())
