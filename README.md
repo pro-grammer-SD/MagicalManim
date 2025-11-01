@@ -12,20 +12,23 @@ Magical Manim is a modern, custom GUI wrapper around [Manim](https://www.manim.c
 * 🖼️ **Custom icons** — pretty app icons for Windows and taskbar.
 * 🛠️ **Syntax helpers** — shortcuts for writing Manim scripts with less pain.
 * 🤖 **Gemini Assisted Code Gen (Beta)**
-- faster coding at your fingertips.
+- Faster coding at your fingertips.
 
 ---
 
 ## 📦 Installation
-- First, you might need MikTex, get it at: https://miktex.org/download
-
 ```bash
+# First, you might need MikTex, get it at: https://miktex.org/download
+
 # Clone the repo
 git clone https://github.com/pro-grammer-SD/MagicalManim.git
 cd MagicalManim
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Then, set up Gemini (set it in .env using the API Key from https://aistudio.google.com/api-keys/)
+# GEMINI_API_KEY=AI...
 
 # Run it
 cd gui
