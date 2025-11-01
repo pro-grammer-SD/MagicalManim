@@ -17,6 +17,7 @@ Magical Manim is a modern, custom GUI wrapper around [Manim](https://www.manim.c
 ---
 
 ## 📦 Installation
+- First, you might need MikTex, get it at: https://miktex.org/download
 
 ```bash
 # Clone the repo
